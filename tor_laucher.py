@@ -7,6 +7,29 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Gtk, Adw, Gio, GLib, GdkPixbuf, Gdk
 
+class Toast(Gtk.Revealer):
+    def __init__(self, message):
+        super().__init__()
+        self.set_transition_type(Gtk.RevealerTransitionType.SLIDE_UP)
+        self.set_transition_duration(300)
+        
+        box = Gtk.Box(spacing=6, margin_top=6, margin_bottom=6,
+                     margin_start=12, margin_end=12)
+        box.get_style_context().add_class("app-notification")
+        
+        label = Gtk.Label(label=message)
+        box.append(label)
+        
+        self.set_child(box)
+    
+    def show(self):
+        self.set_reveal_child(True)
+        GLib.timeout_add_seconds(2, self.dismiss)
+    
+    def dismiss(self):
+        self.set_reveal_child(False)
+        return False
+
 class AddEditBookmarkDialog(Adw.Window):
     def __init__(self, parent, callback, bookmark=None):
         super().__init__(title="Edit Bookmark" if bookmark else "Add New Bookmark")
@@ -103,20 +126,29 @@ class OnionWindow(Adw.ApplicationWindow):
         self.bookmarks_file = self.config_dir / "bookmarks.json"
         self.bookmarks = self.load_bookmarks()
         
-        # Main layout
-        self.box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        # Main layout - using Box as the root widget
+        self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.set_content(self.main_box)  # Correct way to set content for AdwApplicationWindow
+        
+        # Overlay for toast notifications
+        self.overlay = Gtk.Overlay()
+        self.main_box.append(self.overlay)
+        
+        # Content box
+        self.content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        self.overlay.add_overlay(self.content_box)
         
         # Header bar with add button
         self.header = Adw.HeaderBar()
         self.add_button = Gtk.Button.new_from_icon_name("list-add-symbolic")
         self.add_button.connect("clicked", self.show_add_dialog)
         self.header.pack_end(self.add_button)
-        self.box.append(self.header)
+        self.content_box.append(self.header)
         
         # Search
         self.search = Gtk.SearchEntry(placeholder_text="Search onion sites...")
         self.search.connect("search-changed", self.on_search)
-        self.box.append(self.search)
+        self.content_box.append(self.search)
         
         # Flow box for sites
         self.flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE)
@@ -124,11 +156,10 @@ class OnionWindow(Adw.ApplicationWindow):
         self.flow.set_homogeneous(True)
         self.scrolled = Gtk.ScrolledWindow()
         self.scrolled.set_child(self.flow)
-        self.box.append(self.scrolled)
+        self.content_box.append(self.scrolled)
         
         # Load bookmarks
         self.refresh_bookmarks()
-        self.set_content(self.box)
     
     def load_bookmarks(self):
         if self.bookmarks_file.exists():
@@ -250,9 +281,9 @@ class OnionWindow(Adw.ApplicationWindow):
             child.set_visible(text in label.get_text().lower())
     
     def show_toast(self, message):
-        toast = Adw.Toast.new(message)
-        toast.set_timeout(2)  # 2 seconds
-        self.add_toast(toast)
+        toast = Toast(message)
+        self.overlay.add_overlay(toast)
+        toast.show()
 
 class OnionApp(Adw.Application):
     def __init__(self):
