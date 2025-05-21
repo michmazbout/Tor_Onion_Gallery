@@ -1,9 +1,0 @@
-/home/elias/Documents/Codium/Onion_App/Version2/my_onion_app/target/debug/deps/libgtk4_macros-8ad82d853d88fad9.so: /home/elias/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gtk4-macros-0.6.6/src/lib.rs /home/elias/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gtk4-macros-0.6.6/src/attribute_parser.rs /home/elias/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gtk4-macros-0.6.6/src/composite_template_derive.rs /home/elias/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gtk4-macros-0.6.6/src/template_callbacks_attribute.rs /home/elias/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gtk4-macros-0.6.6/src/util.rs
-
-/home/elias/Documents/Codium/Onion_App/Version2/my_onion_app/target/debug/deps/gtk4_macros-8ad82d853d88fad9.d: /home/elias/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gtk4-macros-0.6.6/src/lib.rs /home/elias/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gtk4-macros-0.6.6/src/attribute_parser.rs /home/elias/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gtk4-macros-0.6.6/src/composite_template_derive.rs /home/elias/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gtk4-macros-0.6.6/src/template_callbacks_attribute.rs /home/elias/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gtk4-macros-0.6.6/src/util.rs
-
-/home/elias/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gtk4-macros-0.6.6/src/lib.rs:
-/home/elias/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gtk4-macros-0.6.6/src/attribute_parser.rs:
-/home/elias/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gtk4-macros-0.6.6/src/composite_template_derive.rs:
-/home/elias/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gtk4-macros-0.6.6/src/template_callbacks_attribute.rs:
-/home/elias/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gtk4-macros-0.6.6/src/util.rs:
