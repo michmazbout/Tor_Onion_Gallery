@@ -1,21 +1,79 @@
 import gi
 import json
 import os
-import subprocess
+import re
 from pathlib import Path
+
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Gtk, Adw, Gio, GLib, GdkPixbuf, Gdk
+from gi.repository import Gtk, Adw, Gio, GLib, Gdk, GdkPixbuf
 
-class Toast(Gtk.Revealer):
+CSS = """
+    .card {
+        background: alpha(@card_bg_color, 0.8);
+        border-radius: 18px;
+        padding: 18px;
+        margin: 6px;
+        box-shadow: 0 4px 6px -1px alpha(@card_shade_color, 0.1), 
+                    0 2px 4px -1px alpha(@card_shade_color, 0.06);
+        transition: all 200ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    }
+    
+    .card:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 10px 15px -3px alpha(@card_shade_color, 0.1), 
+                    0 4px 6px -2px alpha(@card_shade_color, 0.05);
+        background: alpha(@card_bg_color, 0.9);
+    }
+    
+    .card:active {
+        transform: translateY(0);
+        transition-duration: 50ms;
+    }
+    
+    .card-icon {
+        opacity: 0.9;
+        -gtk-icon-size: 48px;
+    }
+    
+    .title-label {
+        font-size: 14px;
+        font-weight: 600;
+        margin-top: 8px;
+    }
+    
+    .toast {
+        background: @accent_bg_color;
+        color: @accent_fg_color;
+        border-radius: 12px;
+        margin: 12px;
+        padding: 12px 18px;
+        box-shadow: 0 4px 12px alpha(black, 0.15);
+    }
+    
+    .search-bar {
+        background: alpha(@headerbar_bg_color, 0.8);
+        margin: 12px;
+        border-radius: 12px;
+        box-shadow: 0 2px 8px alpha(black, 0.08);
+    }
+    
+    .empty-state {
+        opacity: 0.5;
+    }
+"""
+
+class ModernToast(Gtk.Revealer):
     def __init__(self, message):
         super().__init__()
         self.set_transition_type(Gtk.RevealerTransitionType.SLIDE_UP)
         self.set_transition_duration(300)
+        self.set_valign(Gtk.Align.END)
+        self.set_halign(Gtk.Align.CENTER)
         
-        box = Gtk.Box(spacing=6, margin_top=6, margin_bottom=6,
+        box = Gtk.Box(spacing=12, margin_top=6, margin_bottom=24,
                      margin_start=12, margin_end=12)
-        box.get_style_context().add_class("app-notification")
+        box.add_css_class("toast")
         
         label = Gtk.Label(label=message)
         box.append(label)
@@ -24,274 +82,368 @@ class Toast(Gtk.Revealer):
     
     def show(self):
         self.set_reveal_child(True)
-        GLib.timeout_add_seconds(2, self.dismiss)
+        GLib.timeout_add_seconds(3, self.dismiss)
     
     def dismiss(self):
         self.set_reveal_child(False)
         return False
 
-class AddEditBookmarkDialog(Adw.Window):
-    def __init__(self, parent, callback, bookmark=None):
-        super().__init__(title="Edit Bookmark" if bookmark else "Add New Bookmark")
+class BookmarkCard(Gtk.Button):
+    def __init__(self, name, icon_name="web-browser-symbolic"):
+        super().__init__()
+        self.add_css_class("card")
+        self.set_size_request(160, 140)
+        
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.set_valign(Gtk.Align.CENTER)
+        
+        icon = Gtk.Image.new_from_icon_name(icon_name)
+        icon.add_css_class("card-icon")
+        box.append(icon)
+        
+        label = Gtk.Label(label=name)
+        label.add_css_class("title-label")
+        label.set_max_width_chars(15)
+        label.set_wrap(True)
+        label.set_justify(Gtk.Justification.CENTER)
+        box.append(label)
+        
+        self.set_child(box)
+
+class AddEditDialog(Adw.Window):
+    def __init__(self, parent, bookmark=None):
+        super().__init__(title="Edit Bookmark" if bookmark else "Add Bookmark")
         self.set_transient_for(parent)
         self.set_modal(True)
         self.set_default_size(400, 300)
-        self.callback = callback
-        self.bookmark = bookmark
         
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12,
-                     margin_top=12, margin_bottom=12, margin_start=12, margin_end=12)
+        header = Adw.HeaderBar()
+        header.set_title_widget(Adw.WindowTitle(title=self.get_title(), 
+                                              subtitle="Manage your onion links"))
         
-        self.name_entry = Gtk.Entry(placeholder_text="Site Name")
-        if bookmark:
-            self.name_entry.set_text(bookmark["name"])
+        clamp = Adw.Clamp()
+        clamp.set_maximum_size(500)
+        clamp.set_margin_top(12)
+        clamp.set_margin_bottom(12)
+        clamp.set_margin_start(24)
+        clamp.set_margin_end(24)
+        
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=24)
+        
+        self.name_entry = Adw.EntryRow(title="Site Name")
+        self.name_entry.set_text(bookmark["name"] if bookmark else "")
         box.append(self.name_entry)
         
-        self.url_entry = Gtk.Entry(placeholder_text="Onion URL (e.g., http://example.onion)")
-        if bookmark:
-            self.url_entry.set_text(bookmark["url"])
+        self.url_entry = Adw.EntryRow(title="Onion URL")
+        self.url_entry.set_text(bookmark["url"] if bookmark else "")
         box.append(self.url_entry)
         
-        icon_button = Gtk.Button(label="Select Icon")
-        self.icon_path_label = Gtk.Label(label="No icon selected")
-        self.icon_path = bookmark["icon_path"] if bookmark else None
-        if self.icon_path:
-            self.icon_path_label.set_label(os.path.basename(self.icon_path))
+        button_box = Gtk.Box(spacing=12, halign=Gtk.Align.END)
         
-        def on_icon_clicked(button):
-            dialog = Gtk.FileChooserNative.new(
-                "Choose Icon",
-                self,
-                Gtk.FileChooserAction.OPEN,
-                "Open",
-                "Cancel"
-            )
-            filter = Gtk.FileFilter()
-            filter.set_name("Image files")
-            filter.add_mime_type("image/*")
-            dialog.add_filter(filter)
-            dialog.connect("response", self.on_file_chooser_response)
-            dialog.show()
-        
-        icon_button.connect("clicked", on_icon_clicked)
-        box.append(icon_button)
-        box.append(self.icon_path_label)
-        
-        action_buttons = Gtk.Box(spacing=6)
         if bookmark:
-            delete_button = Gtk.Button(label="Delete", css_classes=["destructive-action"])
-            delete_button.connect("clicked", self.on_delete_clicked)
-            action_buttons.append(delete_button)
+            delete_btn = Gtk.Button(label="Delete")
+            delete_btn.add_css_class("destructive-action")
+            delete_btn.connect("clicked", self.on_delete)
+            button_box.append(delete_btn)
         
-        save_button = Gtk.Button(label="Save", css_classes=["suggested-action"])
-        save_button.connect("clicked", self.on_save_clicked)
-        action_buttons.append(save_button)
+        cancel_btn = Gtk.Button(label="Cancel")
+        cancel_btn.connect("clicked", lambda b: self.destroy())
+        button_box.append(cancel_btn)
         
-        box.append(action_buttons)
-        self.set_content(box)
+        save_btn = Gtk.Button(label="Save")
+        save_btn.add_css_class("suggested-action")
+        save_btn.connect("clicked", self.on_save)
+        button_box.append(save_btn)
+        
+        box.append(button_box)
+        clamp.set_child(box)
+        
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        main_box.append(header)
+        main_box.append(clamp)
+        self.set_content(main_box)
+        
+        self.callback = None
+        self.bookmark = bookmark
     
-    def on_file_chooser_response(self, dialog, response):
-        if response == Gtk.ResponseType.ACCEPT:
-            self.icon_path = dialog.get_file().get_path()
-            self.icon_path_label.set_label(os.path.basename(self.icon_path))
-        dialog.destroy()
-    
-    def on_save_clicked(self, button):
-        name = self.name_entry.get_text()
-        url = self.url_entry.get_text()
-        if name and url:
+    def on_save(self, button):
+        name = self.name_entry.get_text().strip()
+        url = self.url_entry.get_text().strip()
+        
+        if not name:
+            self.show_error("Name is required")
+            return
+        
+        if not url:
+            self.show_error("URL is required")
+            return
+        
+        if not re.match(r'^https?://[a-z2-7]{56}\.onion/?$', url):
+            self.show_error("Invalid .onion URL format")
+            return
+        
+        if self.callback:
             self.callback({
                 "name": name,
-                "url": url,
-                "icon_path": self.icon_path
+                "url": url
             }, self.bookmark)
-            self.destroy()
-    
-    def on_delete_clicked(self, button):
-        self.callback(None, self.bookmark)
+        
         self.destroy()
+    
+    def on_delete(self, button):
+        if self.callback:
+            self.callback(None, self.bookmark)
+        self.destroy()
+    
+    def show_error(self, message):
+        dialog = Adw.MessageDialog(
+            transient_for=self,
+            heading="Validation Error",
+            body=message
+        )
+        dialog.add_response("ok", "OK")
+        dialog.present()
 
-class OnionWindow(Adw.ApplicationWindow):
+class ModernTorLauncher(Adw.ApplicationWindow):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.set_title("Tor Site Launcher")
-        self.set_default_size(800, 600)
+        self.set_title("Tor Launcher")
+        self.set_default_size(900, 700)
         
-        # Clipboard setup
+        # Apply CSS
+        css_provider = Gtk.CssProvider()
+        css_provider.load_from_data(CSS.encode())
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(),
+            css_provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+        
+        # Clipboard
         self.clipboard = Gdk.Display.get_default().get_clipboard()
         
-        # Storage setup
+        # Bookmarks storage
         self.config_dir = Path.home() / ".config" / "tor-launcher"
         self.config_dir.mkdir(parents=True, exist_ok=True)
         self.bookmarks_file = self.config_dir / "bookmarks.json"
         self.bookmarks = self.load_bookmarks()
         
-        # Main layout - using Box as the root widget
-        self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        self.set_content(self.main_box)  # Correct way to set content for AdwApplicationWindow
+        # Main layout
+        self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         
         # Overlay for toast notifications
         self.overlay = Gtk.Overlay()
-        self.main_box.append(self.overlay)
+        self.overlay.set_child(self.main_box)
+        self.set_content(self.overlay)
         
-        # Content box
-        self.content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        self.overlay.add_overlay(self.content_box)
-        
-        # Header bar with add button
+        # Header bar with theme toggle
         self.header = Adw.HeaderBar()
-        self.add_button = Gtk.Button.new_from_icon_name("list-add-symbolic")
-        self.add_button.connect("clicked", self.show_add_dialog)
-        self.header.pack_end(self.add_button)
-        self.content_box.append(self.header)
+        self.main_box.append(self.header)
         
-        # Search
-        self.search = Gtk.SearchEntry(placeholder_text="Search onion sites...")
-        self.search.connect("search-changed", self.on_search)
-        self.content_box.append(self.search)
+        # Theme switcher
+        self.theme_btn = Gtk.ToggleButton()
+        self.theme_btn.set_icon_name("weather-clear-night-symbolic")
+        self.theme_btn.connect("toggled", self.on_theme_toggle)
+        self.header.pack_end(self.theme_btn)
         
-        # Flow box for sites
-        self.flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE)
-        self.flow.set_max_children_per_line(3)
-        self.flow.set_homogeneous(True)
+        # Add button
+        self.add_btn = Gtk.Button.new_from_icon_name("list-add-symbolic")
+        self.add_btn.connect("clicked", self.show_add_dialog)
+        self.header.pack_end(self.add_btn)
+        
+        # Search bar
+        self.search_bar = Gtk.SearchEntry(placeholder_text="Search bookmarks...")
+        self.search_bar.add_css_class("search-bar")
+        self.search_bar.connect("search-changed", self.on_search)
+        self.main_box.append(self.search_bar)
+        
+        # Scrolled window for bookmarks
         self.scrolled = Gtk.ScrolledWindow()
+        self.scrolled.set_vexpand(True)
+        self.main_box.append(self.scrolled)
+        
+        # Flow box with nice spacing
+        self.flow = Gtk.FlowBox()
+        self.flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.flow.set_max_children_per_line(5)
+        self.flow.set_column_spacing(12)
+        self.flow.set_row_spacing(12)
+        self.flow.set_margin_start(12)
+        self.flow.set_margin_end(12)
+        self.flow.set_margin_bottom(12)
         self.scrolled.set_child(self.flow)
-        self.content_box.append(self.scrolled)
+        
+        # Empty state container
+        self.empty_state = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, 
+                                 spacing=12, valign=Gtk.Align.CENTER)
+        self.empty_state.add_css_class("empty-state")
+        empty_icon = Gtk.Image.new_from_icon_name("bookmark-missing-symbolic")
+        empty_icon.set_pixel_size(64)
+        self.empty_state.append(empty_icon)
+        empty_label = Gtk.Label(label="No bookmarks yet\nClick + to add one")
+        self.empty_state.append(empty_label)
+        
+        # Right-click menu actions
+        self.edit_action = Gio.SimpleAction.new("edit", None)
+        self.edit_action.connect("activate", self.on_edit_action)
+        self.add_action(self.edit_action)
+        
+        self.delete_action = Gio.SimpleAction.new("delete", None)
+        self.delete_action.connect("activate", self.on_delete_action)
+        self.add_action(self.delete_action)
         
         # Load bookmarks
         self.refresh_bookmarks()
+        
+        # Show empty state if no bookmarks
+        if not self.bookmarks:
+            self.flow.insert(self.empty_state, -1)
     
     def load_bookmarks(self):
-        if self.bookmarks_file.exists():
-            try:
+        try:
+            if self.bookmarks_file.exists():
                 with open(self.bookmarks_file, 'r') as f:
                     return json.load(f)
-            except:
-                return []
+        except:
+            pass
         return []
     
     def save_bookmarks(self):
         with open(self.bookmarks_file, 'w') as f:
-            json.dump(self.bookmarks, f)
+            json.dump(self.bookmarks, f, indent=2)
     
     def refresh_bookmarks(self):
+        # Clear existing
         while self.flow.get_first_child():
             self.flow.remove(self.flow.get_first_child())
         
+        # Show empty state if no bookmarks
+        if not self.bookmarks:
+            self.flow.insert(self.empty_state, -1)
+            return
+        
+        # Add all bookmarks
         for site in self.bookmarks:
-            self.add_bookmark_card(site)
+            card = BookmarkCard(site["name"])
+            card.connect("clicked", self.on_card_clicked, site)
+            
+            # Right click menu
+            gesture = Gtk.GestureClick(button=3)
+            gesture.connect("pressed", self.on_card_right_click, site)
+            card.add_controller(gesture)
+            
+            self.flow.append(card)
     
-    def add_bookmark_card(self, site):
-        card = Gtk.Button()
-        card.set_size_request(200, 150)
-        
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        
-        # Icon (custom or default)
-        icon = Gtk.Image()
-        if site.get("icon_path") and os.path.exists(site["icon_path"]):
-            try:
-                pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_size(site["icon_path"], 48, 48)
-                icon.set_from_pixbuf(pixbuf)
-            except:
-                icon.set_from_icon_name("applications-internet")
-                icon.set_pixel_size(48)
-        else:
-            icon.set_from_icon_name("applications-internet")
-            icon.set_pixel_size(48)
-        
-        box.append(icon)
-        box.append(Gtk.Label(label=site["name"]))
-        card.set_child(box)
-        
-        # Click handlers
-        gesture = Gtk.GestureClick()
-        gesture.connect("pressed", self.on_card_clicked, site)
-        card.add_controller(gesture)
-        
-        # Right-click menu
-        menu_gesture = Gtk.GestureClick(button=3)
-        menu_gesture.connect("pressed", self.on_card_right_click, site)
-        card.add_controller(menu_gesture)
-        
-        self.flow.append(card)
-    
-    def on_card_clicked(self, gesture, n_press, x, y, site):
-        if gesture.get_current_button() == 1:  # Left click
-            self.clipboard.set(site["url"])
-            self.show_toast(f"Copied: {site['url']}")
+    def on_card_clicked(self, button, site):
+        self.clipboard.set(site["url"])
+        self.show_toast(f"Copied: {site['url']}")
     
     def on_card_right_click(self, gesture, n_press, x, y, site):
+        # Store the selected site
+        self.selected_site = site
+        
+        # Create and show the popover menu
         menu = Gio.Menu()
-        menu.append("Edit", "edit")
-        menu.append("Delete", "delete")
+        menu.append("Edit", "win.edit")
+        menu.append("Delete", "win.delete")
         
         popover = Gtk.PopoverMenu()
         popover.set_menu_model(menu)
         popover.set_parent(gesture.get_widget())
         popover.set_position(Gtk.PositionType.BOTTOM)
-        
-        def on_edit(*args):
-            self.show_edit_dialog(site)
-            popover.popdown()
-        
-        def on_delete(*args):
-            self.bookmarks.remove(site)
-            self.save_bookmarks()
-            self.refresh_bookmarks()
-            popover.popdown()
-        
-        edit_action = Gio.SimpleAction.new("edit", None)
-        edit_action.connect("activate", on_edit)
-        self.add_action(edit_action)
-        
-        delete_action = Gio.SimpleAction.new("delete", None)
-        delete_action.connect("activate", on_delete)
-        self.add_action(delete_action)
-        
         popover.popup()
     
+    def on_edit_action(self, action, param):
+        if hasattr(self, 'selected_site'):
+            self.show_edit_dialog(self.selected_site)
+            del self.selected_site
+    
+    def on_delete_action(self, action, param):
+        if hasattr(self, 'selected_site'):
+            self.show_delete_dialog(self.selected_site)
+            del self.selected_site
+    
     def show_add_dialog(self, button):
-        def callback(bookmark, _):
-            if bookmark:
-                self.bookmarks.append(bookmark)
-                self.save_bookmarks()
-                self.refresh_bookmarks()
-        
-        dialog = AddEditBookmarkDialog(self, callback)
+        dialog = AddEditDialog(self)
+        dialog.callback = self.on_bookmark_modified
         dialog.present()
     
-    def show_edit_dialog(self, bookmark):
-        def callback(updated_bookmark, original_bookmark):
-            if updated_bookmark:  # Save
-                index = self.bookmarks.index(original_bookmark)
-                self.bookmarks[index] = updated_bookmark
-            else:  # Delete
-                self.bookmarks.remove(original_bookmark)
-            self.save_bookmarks()
-            self.refresh_bookmarks()
-        
-        dialog = AddEditBookmarkDialog(self, callback, bookmark)
+    def show_edit_dialog(self, site):
+        dialog = AddEditDialog(self, site)
+        dialog.callback = self.on_bookmark_modified
         dialog.present()
+    
+    def show_delete_dialog(self, site):
+        dialog = Adw.MessageDialog(
+            transient_for=self,
+            heading="Delete Bookmark?",
+            body=f"Are you sure you want to delete '{site['name']}'?"
+        )
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("delete", "Delete")
+        dialog.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.connect("response", lambda d, r: self.on_delete_response(d, r, site))
+        dialog.present()
+    
+    def on_delete_response(self, dialog, response, site):
+        if response == "delete":
+            try:
+                self.bookmarks.remove(site)
+                self.save_bookmarks()
+                self.refresh_bookmarks()
+                self.show_toast("Bookmark deleted")
+            except ValueError:
+                self.show_toast("Error: Bookmark not found")
+        dialog.destroy()
+    
+    def on_bookmark_modified(self, bookmark, original):
+        if bookmark:  # Add or update
+            if original:  # Update
+                index = self.bookmarks.index(original)
+                self.bookmarks[index] = bookmark
+                self.show_toast("Bookmark updated")
+            else:  # Add new
+                self.bookmarks.append(bookmark)
+                self.show_toast("Bookmark added")
+        else:  # Delete
+            self.bookmarks.remove(original)
+            self.show_toast("Bookmark deleted")
+        
+        self.save_bookmarks()
+        self.refresh_bookmarks()
     
     def on_search(self, entry):
         text = entry.get_text().lower()
-        for child in self.flow.get_children():
-            label = child.get_child().get_children()[1]
-            child.set_visible(text in label.get_text().lower())
+        for i in range(len(self.bookmarks)):
+            child = self.flow.get_child_at_index(i)
+            if child:
+                site = self.bookmarks[i]
+                visible = text in site["name"].lower() or text in site["url"].lower()
+                child.set_visible(visible)
+    
+    def on_theme_toggle(self, button):
+        style_manager = Adw.StyleManager.get_default()
+        if button.get_active():
+            style_manager.set_color_scheme(Adw.ColorScheme.FORCE_DARK)
+            button.set_icon_name("weather-clear-symbolic")
+        else:
+            style_manager.set_color_scheme(Adw.ColorScheme.FORCE_LIGHT)
+            button.set_icon_name("weather-clear-night-symbolic")
     
     def show_toast(self, message):
-        toast = Toast(message)
+        toast = ModernToast(message)
         self.overlay.add_overlay(toast)
         toast.show()
 
-class OnionApp(Adw.Application):
+class TorLauncherApp(Adw.Application):
     def __init__(self):
-        super().__init__(application_id='com.example.OnionLauncher')
+        super().__init__(application_id='com.example.TorLauncher',
+                         flags=Gio.ApplicationFlags.FLAGS_NONE)
     
     def do_activate(self):
-        win = OnionWindow(application=self)
+        win = ModernTorLauncher(application=self)
         win.present()
 
-app = OnionApp()
-app.run(None)
+if __name__ == "__main__":
+    app = TorLauncherApp()
+    app.run(None)
