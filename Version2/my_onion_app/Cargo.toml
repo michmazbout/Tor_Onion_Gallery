@@ -1,0 +1,15 @@
+[package]
+name = "tor_launcher"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gtk = { version = "0.6", package = "gtk4", features = ["v4_6"] }  # Updated line
+libadwaita = { version = "0.4", package = "libadwaita" }  # Updated version
+gio = "0.17"
+glib = "0.17"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+once_cell = "1.18"
+regex = "1.10"
+dirs = "5.0"
